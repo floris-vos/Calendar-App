@@ -1,0 +1,253 @@
+from requests import get as request
+from webbrowser import open as display
+from lxml import html as clean
+from bs4 import BeautifulSoup
+import datetime
+from tkinter import Tk, OptionMenu, StringVar, Frame, Button, _setit, Label
+from tkinterhtml import HtmlFrame
+from tkcalendar import Calendar, DateEntry
+
+
+
+class ICSGenerator:
+
+	def __init__(self):
+		self.agenda_list = []
+		self.unit = []
+		self.agenda = """BEGIN:VCALENDAR"""
+
+	def make_data(self, info, title,date):
+		if title == "philharmoniker":
+			return(self.philharmoniker(info, date))
+		elif title == "Kirchenmusik":
+			return(self.berlin_evangelisch(info))
+		elif title == "Stressfaktor":
+			return(self.stressfaktor(info, date))
+
+	def berlin_evangelisch(self, content):
+		unit = {'location': [],
+		'summary': [],
+		'date': [],
+		'description': []}
+		for hit in content.findAll(attrs={'class' : 'item eventLocation'}):
+			unit['location'].append(hit.contents[3].div.contents[0].strip())
+
+		for hit in content.findAll(attrs={'class' : 'ui header eventTitle'}):
+			unit['summary'].append(hit.contents[0])
+
+		for hit in content.findAll("span", {"class": "date-display-single"}):
+			date = hit.get('content')
+			if date == None:
+				date = hit.span.get('content')
+			unit['date'].append(date.replace('-','').replace(':','')[:-5])
+
+		for hit in content.findAll(attrs={'class' : 'eventSummary'}):
+			unit['description'].append(hit.div.div.contents[0].strip())
+		return(unit)
+
+	def philharmoniker(self, content, date):
+		unit = {'location': ["foyer philharmoniker"],
+		'summary': ["lunchkonzert"],
+		'date': [str(date).replace('-','').replace(':','')+"T130000"]}
+		unit['description'] = content.find("div", {"class": "performance-details-wrapper"}).p.contents[0]
+		return(unit)
+
+	def stressfaktor(self,content,date):
+		unit = {'location': [],
+		'summary': [],
+		'date': [],
+		'description': []}
+		for hit in content.findAll("h4", {"class": "field-content status-confirmed"}):
+			unit['summary'].append(clean.fromstring(str(hit)).text_content())
+		for hit in content.findAll("p", {"class": "address"}):
+			unit['location'].append(clean.fromstring(str(hit)).text_content().replace('\n',' '))
+		for hit in content.findAll("span", {"class": "field-content status-confirmed"}):
+			unit['description'].append(clean.fromstring(str(hit)).text_content())
+		for hit in content.findAll("time"):
+			unit['date'].append(str(date).replace('-','').replace(':','') + "T"+hit.contents[0][:4].replace(':','')+"000")
+		return(unit)
+
+	def create_agenda_item(self, unit, index):
+		self.agenda += (f"""
+BEGIN:VEVENT
+SUMMARY:{unit['summary'][index]}
+DTSTART;TZID=Europe/Berlin:{unit['date'][index]}
+LOCATION:{unit['location'][index]}
+DESCRIPTION:{unit['description'][index]}
+END:VEVENT""")
+
+	def save_agenda(self):
+		saver = self.agenda + """
+END:VCALENDAR"""	
+		text_file = open("agenda.ics", "w")
+		text_file.write(saver)
+		text_file.close()
+
+
+
+class Generator:
+
+
+
+	def get_html(self, url, element, identifier, name):
+		try:
+			headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36'}
+			content = request(url, timeout=10, headers=headers)
+		except: #this is to catch any error in accessing the page
+			return("<body>connection error</body>")
+		content = BeautifulSoup(content.text, 'html.parser')
+		content = content.find(element, {identifier: name})
+		return(content)
+
+	def generate_html(self, date, title):
+		month = str(date)[5:7]
+		day = str(date)[9:11]
+		year = str(date)[0:4]
+		item_list = self.set_itemlist(date, day, month,year)
+		for thing in item_list:
+			if thing['title']  == title:
+				item = thing
+				return(item['url'], self.get_html(item['url'], item['element'], item['identifier'], item['name']))
+		
+
+	def set_itemlist(self, date, day, month, year):
+		""" template for new item:
+		{"title": "",
+			"url": "",
+			"element": "",
+			"identifier":"",
+			"name":""}
+		"""
+		return([{"title": "philharmoniker",
+			"url": f"https://www.berliner-philharmoniker.de/en/concerts/calendar/from/{year}-{month}",
+			"element": "article",
+			"identifier": "data-time-begin",
+			"name": date},
+			{"title": "Stressfaktor",
+			"url": f"https://stressfaktor.squat.net/termine/alle?f%5B0%5D=event_date%3A{date}",
+			"element": "div",
+			"identifier":"class",
+			"name":"view-content"},
+			{"title": "Berlin Gratis",
+			"url": f"https://www.gratis-in-berlin.de/kalender/tagestipps/{date}",
+			"element": "div",
+			"identifier":"class",
+			"name":"tippList"},
+			{"title": "Kirchenmusik",
+			"url": f"https://www.berlin-evangelisch.de/musik-in-kirchen?start_date={date}&end_date={date}&entity_id=1885&&&&#node-1885",
+			"element": "div",
+			"identifier":"class",
+			"name":"ui very relaxed items full-list"},
+			{"title": "babylon",
+			"url": "https://babylonberlin.eu/programm/eintritt-frei",
+			"element": "ul",
+			"identifier":"id",
+			"name":"regridart-194"}])
+
+ 
+class Gui:
+	def __init__(self):
+		self.win = Tk()
+		now = datetime.datetime.now()
+		day_name = now.strftime("%A")
+		self.generator = Generator()
+		item_list = self.generator.set_itemlist(0,0,0,0)
+		self.win.geometry("1100x600")
+		self.win.protocol('WM_DELETE_WINDOW', self.quit)
+		self.win.title("Berlin Agenda")
+		self.main_frame = Frame(self.win)
+		self.main_frame.grid(row=1, column=1)
+		self.holder= Frame(self.main_frame)
+		self.holder.grid(row=1, column=2, sticky='new')
+		self.cal = Calendar(self.holder,
+				selectmode='day',
+				cursor="hand1", year=int(now.year), month=int(now.month), day=int(now.day))
+		self.cal.pack(side='top')
+		self.option = StringVar()
+		self.option.set("choose a place")
+		titles = list()
+		for title in item_list:
+			titles.append(title['title'])
+		Label(self.holder, text="WEBSITES:", bg="yellow", font='bold').pack(side='top',fill='both')
+		self.option_menu = OptionMenu(self.holder, self.option, *titles)
+		self.option_menu.pack(side='top',fill='both')
+		self.option_menu.config(width=20)
+		Button(self.holder, text="Show", command=self.generate_html).pack(side='top',fill='both')
+		Button(self.holder, text="Open url in Browser", command=self.open_in_browser).pack(side='top',fill='both')
+		Label(self.holder, text="EVENTS:", bg="yellow", font='bold').pack(side='top',fill='both')
+		self.agenda = StringVar()
+		self.agenda.set("select event:")
+		self.agenda_menu = OptionMenu(self.holder, self.agenda, None)
+		self.agenda_menu.pack(side='top',fill='both')
+		self.agenda_menu.config(width=20)
+		Button(self.holder, text="Add to Agenda", command=self.add).pack(side='top',fill='both')
+		Label(self.holder, text="CALENDAR ITEMS:", bg="yellow", font='bold').pack(side='top',fill='both')
+		self.selection = StringVar()
+		self.selection.set("empty")
+		self.selection_menu = OptionMenu(self.holder, self.selection, None)
+		self.selection_menu.pack(side='top',fill='both')
+		self.selection_menu.config(width=20)
+		#Button(self.holder, text="Remove from Agenda", command=self.remove).pack(side='top',fill='both')
+		Button(self.holder, text="Save Agenda", command=self.save).pack(side='top',fill='both')
+		
+		self.frame = HtmlFrame(self.main_frame, horizontal_scrollbar="auto")
+		self.frame.grid(row=1,column=1)
+		if day_name == "Wednesday":
+			self.frame.set_content("<body>Lunchkonzert Philharmonie</body>")
+		elif day_name == "Saturday":
+			self.frame.set_content("<body>Stummfilm um Mitternacht</body>")
+		self.url = False
+		self.unit = False
+		self.icsgenerator = ICSGenerator()
+		self.win.mainloop()
+
+	def remove(self):
+		pass
+		"""
+		TO MAKE DYNAMIC REMOVAL POSSIBLE; IT WILL BE QUINTESSENTIAL TO
+		STORE THE SELECTED ITEMS IN A LIST OF DICTIONARIES; ONLY LATER
+		TO BE CONVERTED TO  A STRING THAT WILL BE WRITTEN TO DISK"""
+
+	def save(self):
+		self.icsgenerator.save_agenda()
+
+	def add(self):
+		title = self.agenda.get()
+		index = self.unit['summary'].index(title)
+		self.icsgenerator.create_agenda_item(self.unit, index)
+		if self.selection.get() == "empty":
+			self.selection_menu['menu'].delete(0, 'end')
+		self.selection.set(title)
+		self.selection_menu['menu'].add_command(label=title, command=_setit(self.selection, title))
+
+	def open_in_browser(self):
+		if self.url:
+			display(self.url)
+
+	def set_agenda_menu(self, unit):
+		self.unit=unit
+		self.agenda.set("select event")
+		self.agenda_menu['menu'].delete(0, 'end')
+		titles = unit['summary']
+		for choice in titles:
+			self.agenda_menu['menu'].add_command(label=choice, command=_setit(self.agenda, choice))
+
+	def generate_html(self):
+		date = self.cal.selection_get()
+		title = self.option.get()
+		url, info = self.generator.generate_html(date, title)
+		self.frame.set_content(info)
+		self.url = url
+		self.unit = self.icsgenerator.make_data(info, title, date)
+		self.set_agenda_menu(self.unit)
+
+
+
+	def quit(self):
+		self.win.after(100, self.win.destroy)
+
+def main():
+	Gui()
+
+if __name__ == '__main__':
+	main()
